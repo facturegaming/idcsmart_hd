@@ -316,7 +316,7 @@
           <strong>upstream_product_shopping_url</strong>。
         </p>
         <div class="flow">
-          <div><b>1. 输入站点</b><br>例如 www.tuofeiyun.cn</div>
+          <div><b>1. 输入站点</b><br>填写要检测的目标域名</div>
           <div><b>2. 全量分类</b><br>从 /cart 提取全部商品分类入口</div>
           <div><b>3. 进度扫描</b><br>逐分类发现产品并分批检测</div>
         </div>
@@ -325,7 +325,7 @@
       <form class="card form" id="checkForm">
         <div class="field">
           <label for="target">目标站点地址</label>
-          <input id="target" name="target" placeholder="www.tuofeiyun.cn" autocomplete="off" required>
+          <input id="target" name="target" placeholder="请输入目标域名或站点地址" autocomplete="off" required>
           <div class="hint">可以不写 https://，程序会自动补全。请只检测你有权限测试的站点。</div>
         </div>
 
@@ -337,7 +337,6 @@
 
         <div class="actions">
           <button class="primary" id="submitBtn" type="submit">开始检测</button>
-          <button class="ghost" id="demoBtn" type="button">填入示例</button>
         </div>
       </form>
     </section>
@@ -354,7 +353,6 @@
     const targetInput = document.querySelector('#target');
     const pidsInput = document.querySelector('#pids');
     const submitBtn = document.querySelector('#submitBtn');
-    const demoBtn = document.querySelector('#demoBtn');
     const resultBox = document.querySelector('#resultBox');
 
     const batchSize = 20;
@@ -619,12 +617,6 @@
 
       finishScan();
     };
-
-    demoBtn.addEventListener('click', () => {
-      targetInput.value = 'www.tuofeiyun.cn';
-      pidsInput.value = '';
-      targetInput.focus();
-    });
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
