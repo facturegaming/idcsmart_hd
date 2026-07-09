@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>魔方财务上游信息检测工具</title>
+  <style>
+    :root {
+      --bg: #eef3ff;
+      --panel: #ffffff;
+      --text: #14213d;
+      --muted: #667085;
+      --line: #d9e2f2;
+      --brand: #2563eb;
+      --brand2: #1d4ed8;
+      --good: #0f9f6e;
+      --bad: #dc2626;
+      --warn: #b45309;
+      --code: #0f172a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, .20), transparent 32rem),
+        linear-gradient(135deg, #f8fbff 0%, var(--bg) 100%);
+    }
+
+    .page {
+      width: min(1040px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 48px 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, .92);
+      border: 1px solid rgba(217, 226, 242, .9);
+      border-radius: 24px;
+      box-shadow: 0 24px 70px rgba(23, 37, 84, .12);
+    }
+
+    .intro { padding: 32px; }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.1;
+      letter-spacing: -1px;
+    }
+
+    .desc {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.8;
+      font-size: 15px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .flow div {
+      padding: 14px;
+      border-radius: 16px;
+      background: #f5f8ff;
+      border: 1px solid var(--line);
+      color: #344054;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .form { padding: 28px; }
+
+    label {
+      display: block;
+      margin: 0 0 8px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 13px 14px;
+      outline: none;
+      font: inherit;
+      color: var(--text);
+      background: #fbfdff;
+      transition: border-color .18s ease, box-shadow .18s ease;
+    }
+
+    input:focus, textarea:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, .12);
+    }
+
+    textarea { min-height: 76px; resize: vertical; }
+
+    .field { margin-bottom: 18px; }
+
+    .hint {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 22px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 14px;
+      padding: 13px 18px;
+      font: inherit;
+      cursor: pointer;
+      transition: transform .12s ease, background .18s ease, opacity .18s ease;
+    }
+
+    button:active { transform: translateY(1px); }
+    button:disabled { cursor: not-allowed; opacity: .62; }
+
+    .primary {
+      flex: 1;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      font-weight: 700;
+    }
+
+    .ghost {
+      color: var(--brand2);
+      background: #edf4ff;
+    }
+
+    .result {
+      margin-top: 24px;
+      padding: 24px;
+      display: none;
+    }
+
+    .result.show { display: block; }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 16px;
+      margin-bottom: 18px;
+    }
+
+    .status strong { font-size: 18px; }
+    .status span { color: var(--muted); font-size: 13px; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: #eef2ff;
+      color: var(--brand2);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .summary div {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+
+    .summary b { display: block; margin-bottom: 6px; }
+    .summary span { color: var(--muted); font-size: 13px; word-break: break-all; }
+
+    .progress {
+      margin: 4px 0 18px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fbfdff;
+    }
+
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .progress-track {
+      height: 12px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e5edff;
+    }
+
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--brand), #22c55e);
+      transition: width .25s ease;
+    }
+
+    .list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: #fff;
+    }
+
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .item-title { font-weight: 800; }
+    .ok { color: var(--good); }
+    .miss { color: var(--bad); }
+    .warn { color: var(--warn); }
+
+    .url {
+      display: block;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #f8fafc;
+      color: var(--brand2);
+      word-break: break-all;
+      text-decoration: none;
+      border: 1px solid #e5e7eb;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 12px 0 0;
+      padding: 14px;
+      border-radius: 14px;
+      color: #dbeafe;
+      background: var(--code);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .error {
+      padding: 14px 16px;
+      border: 1px solid #fecaca;
+      background: #fff1f2;
+      color: #991b1b;
+      border-radius: 16px;
+      line-height: 1.7;
+    }
+
+    footer {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.8;
+      text-align: center;
+    }
+
+    @media (max-width: 860px) {
+      .hero, .summary { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .page { padding: 24px 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="card intro">
+        <h1>魔方财务上游信息检测工具</h1>
+        <p class="desc">
+          输入站点域名后，工具会优先访问目标站的 <strong>/cart</strong> 页面识别全部商品分类，
+          再逐个分类提取产品 ID，最后分批请求 <strong>/api/product/prodetail?pids[0]=产品ID</strong>，检查返回内容里是否存在
+          <strong>upstream_product_shopping_url</strong>。
+        </p>
+        <div class="flow">
+          <div><b>1. 输入站点</b><br>例如 www.tuofeiyun.cn</div>
+          <div><b>2. 全量分类</b><br>从 /cart 提取全部商品分类入口</div>
+          <div><b>3. 进度扫描</b><br>逐分类发现产品并分批检测</div>
+        </div>
+      </div>
+
+      <form class="card form" id="checkForm">
+        <div class="field">
+          <label for="target">目标站点地址</label>
+          <input id="target" name="target" placeholder="www.tuofeiyun.cn" autocomplete="off" required>
+          <div class="hint">可以不写 https://，程序会自动补全。请只检测你有权限测试的站点。</div>
+        </div>
+
+        <div class="field">
+          <label for="pids">产品 ID（可选）</label>
+          <textarea id="pids" name="pids" placeholder="不填则自动识别 /cart；也可以手动填：1,2,3"></textarea>
+          <div class="hint">不填会自动遍历 /cart 下的全部商品分类；手动填写时也会按批次一次性扫完。</div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="submitBtn" type="submit">开始检测</button>
+          <button class="ghost" id="demoBtn" type="button">填入示例</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card result" id="resultBox"></section>
+
+    <footer>
+      本工具为本地辅助检测工具，不上传数据到第三方服务器。请勿用于未授权目标。
+    </footer>
+  </main>
+
+  <script>
+    const form = document.querySelector('#checkForm');
+    const targetInput = document.querySelector('#target');
+    const pidsInput = document.querySelector('#pids');
+    const submitBtn = document.querySelector('#submitBtn');
+    const demoBtn = document.querySelector('#demoBtn');
+    const resultBox = document.querySelector('#resultBox');
+
+    const batchSize = 20;
+    let scanState = null;
+
+    const escapeHtml = (value) => String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+
+    const chunkArray = (items, size) => {
+      const chunks = [];
+      for (let index = 0; index < items.length; index += size) {
+        chunks.push(items.slice(index, index + size));
+      }
+      return chunks;
+    };
+
+    const toIdList = (items) => {
+      const seen = {};
+      const output = [];
+      (items || []).forEach((item) => {
+        const id = String(item == null ? '' : item).trim();
+        if (/^\d{1,10}$/.test(id) && !seen[id]) {
+          seen[id] = true;
+          output.push(id);
+        }
+      });
+      return output;
+    };
+
+    const mergeIdLists = (left, right) => toIdList([].concat(left || [], right || []));
+
+    const fetchJson = async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    };
+
+    const renderError = (message, extra = '') => {
+      resultBox.className = 'card result show';
+      resultBox.innerHTML = `
+        <div class="error">
+          <b>检测失败</b><br>
+          ${escapeHtml(message)}
+          ${extra ? `<pre>${escapeHtml(extra)}</pre>` : ''}
+        </div>
+      `;
+    };
+
+    const renderDiscovering = () => {
+      resultBox.className = 'card result show';
+      resultBox.innerHTML = `
+        <div class="status">
+          <div><strong id="discoverTitle">正在发现商品分类</strong><br><span id="discoverText">正在读取 /cart，提取全部商品分类入口...</span></div>
+          <span class="pill" id="discoverPill">准备中</span>
+        </div>
+        <div class="progress">
+          <div class="progress-meta">
+            <span id="discoverStage">分类发现</span>
+            <span id="discoverPercent">0%</span>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="discoverFill" style="width: 8%"></div></div>
+        </div>
+      `;
+    };
+
+    const updateDiscoverProgress = (completed, total, text) => {
+      const safeTotal = Math.max(total || 0, 1);
+      const percent = total ? Math.min(100, Math.round((completed / safeTotal) * 100)) : 0;
+      const fill = document.querySelector('#discoverFill');
+      const percentNode = document.querySelector('#discoverPercent');
+      const textNode = document.querySelector('#discoverText');
+      const pill = document.querySelector('#discoverPill');
+
+      if (fill) fill.style.width = `${Math.max(percent, 8)}%`;
+      if (percentNode) percentNode.textContent = `${percent}%`;
+      if (textNode) textNode.textContent = text || `已读取 ${completed}/${total} 个分类`;
+      if (pill) pill.textContent = total ? `${completed}/${total} 分类` : '准备中';
+    };
+
+    const renderScanShell = (discover) => {
+      scanState = {
+        target: discover.target,
+        mode: discover.mode,
+        discovery: discover.discovery || {},
+        ids: discover.ids || [],
+        completed: 0,
+        foundCount: 0,
+        rawContainsKey: false,
+        requests: [],
+        results: []
+      };
+
+      resultBox.className = 'card result show';
+      resultBox.innerHTML = `
+        <div class="status">
+          <div><strong id="scanTitle">正在扫描全部产品</strong><br><span>${escapeHtml(discover.target.origin)}</span></div>
+          <span class="pill" id="scanPill">0/${discover.total} 完成</span>
+        </div>
+        <div class="progress">
+          <div class="progress-meta">
+            <span id="progressText">准备开始批量检测...</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        </div>
+        <div class="summary">
+          <div><b>识别方式</b><span>${discover.mode === 'cart' ? '自动遍历全部分类' : '手动产品 ID'}</span></div>
+          <div><b>产品总数</b><span>${discover.total}</span></div>
+          <div><b>命中数量</b><span id="foundCount">0</span></div>
+        </div>
+        <div class="list" id="scanList"></div>
+        <pre id="scanMeta">${escapeHtml(JSON.stringify({ discovery: scanState.discovery }, null, 2))}</pre>
+      `;
+    };
+
+    const updateProgress = (text = '') => {
+      if (!scanState) return;
+      const total = Math.max(scanState.ids.length, 1);
+      const percent = Math.min(100, Math.round((scanState.completed / total) * 100));
+      document.querySelector('#progressFill').style.width = `${percent}%`;
+      document.querySelector('#progressPercent').textContent = `${percent}%`;
+      document.querySelector('#progressText').textContent = text || `已扫描 ${scanState.completed}/${scanState.ids.length} 个产品`;
+      document.querySelector('#scanPill').textContent = `${scanState.completed}/${scanState.ids.length} 完成`;
+      document.querySelector('#foundCount').textContent = scanState.foundCount;
+    };
+
+    const resultItemHtml = (item) => {
+      const state = item.hasUpstream
+        ? '<span class="ok">发现上游链接</span>'
+        : (item.exists ? '<span class="warn">字段为空或未泄露</span>' : '<span class="miss">未匹配到产品详情</span>');
+      const title = item.productName ? `${item.productName}（ID: ${item.productId}）` : `产品 ID: ${item.productId}`;
+      const link = item.hasUpstream
+        ? `<a class="url" href="${escapeHtml(item.upstreamUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.upstreamUrl)}</a>`
+        : '<div class="hint">没有拿到 upstream_product_shopping_url。</div>';
+
+      return `
+        <div class="item">
+          <div class="item-head">
+            <div class="item-title">${escapeHtml(title)}</div>
+            ${state}
+          </div>
+          ${link}
+        </div>
+      `;
+    };
+
+    const appendBatchResults = (batch) => {
+      const list = document.querySelector('#scanList');
+      const results = batch.results || [];
+      scanState.requests.push(batch.request || {});
+      scanState.rawContainsKey = scanState.rawContainsKey || Boolean(batch.request && batch.request.rawContainsKey);
+
+      results.forEach((item) => {
+        scanState.results.push(item);
+        if (item.hasUpstream) scanState.foundCount += 1;
+        list.insertAdjacentHTML('beforeend', resultItemHtml(item));
+      });
+
+      scanState.completed += results.length || (batch.ids || []).length;
+      updateProgress();
+    };
+
+    const finishScan = () => {
+      document.querySelector('#scanTitle').textContent = '检测完成';
+      updateProgress('全部产品已扫描完成');
+      document.querySelector('#progressFill').style.width = '100%';
+      document.querySelector('#progressPercent').textContent = '100%';
+      document.querySelector('#scanPill').textContent = `${scanState.foundCount}/${scanState.results.length} 命中`;
+      document.querySelector('#scanMeta').textContent = JSON.stringify({
+        target: scanState.target,
+        mode: scanState.mode,
+        total: scanState.ids.length,
+        scanned: scanState.results.length,
+        rawContainsKey: scanState.rawContainsKey,
+        discovery: scanState.discovery,
+        requests: scanState.requests
+      }, null, 2);
+    };
+
+    const discoverAllProductIds = async ({ target, pids }) => {
+      renderDiscovering();
+      const discoverParams = new URLSearchParams({ target, pids });
+      const discover = await fetchJson(`/api/discover?${discoverParams.toString()}`);
+
+      if (!discover.ok) return discover;
+
+      let ids = toIdList(discover.ids || []);
+      const pages = discover.mode === 'cart' ? (discover.cartPages || []) : [];
+      const categoryScanned = [];
+      const categoryErrors = [];
+
+      if (pages.length > 0) {
+        updateDiscoverProgress(0, pages.length, `已识别 ${pages.length} 个商品分类，开始逐分类读取产品...`);
+
+        for (let index = 0; index < pages.length; index += 1) {
+          const page = pages[index];
+          updateDiscoverProgress(index, pages.length, `正在读取第 ${index + 1}/${pages.length} 个分类...`);
+
+          const pageParams = new URLSearchParams({ target, page });
+          const pageResult = await fetchJson(`/api/discover-page?${pageParams.toString()}`);
+
+          if (pageResult.ok) {
+            ids = mergeIdLists(ids, pageResult.ids || []);
+            categoryScanned.push({
+              page: pageResult.page,
+              total: pageResult.total
+            });
+          } else {
+            categoryErrors.push({
+              page,
+              reason: pageResult.reason || '分类读取失败'
+            });
+          }
+
+          updateDiscoverProgress(index + 1, pages.length, `已读取 ${index + 1}/${pages.length} 个分类，当前去重产品 ${ids.length} 个`);
+        }
+      }
+
+      discover.ids = ids;
+      discover.total = ids.length;
+      if (!discover.discovery) discover.discovery = {};
+      discover.discovery.categoryScanned = categoryScanned;
+      discover.discovery.categoryErrors = categoryErrors;
+      discover.discovery.finalProductCount = ids.length;
+
+      return discover;
+    };
+
+    const runFullScan = async ({ target, pids }) => {
+      const discover = await discoverAllProductIds({ target, pids });
+
+      if (!discover.ok) {
+        renderError(discover.reason || '没有识别到产品 ID。', JSON.stringify(discover.discovery || {}, null, 2));
+        return;
+      }
+
+      if (!discover.ids || discover.ids.length === 0) {
+        renderError('没有识别到任何产品 ID。', JSON.stringify(discover.discovery || {}, null, 2));
+        return;
+      }
+
+      renderScanShell(discover);
+      const chunks = chunkArray(discover.ids, discover.batchSize || batchSize);
+
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        updateProgress(`正在扫描第 ${index + 1}/${chunks.length} 批，当前批 ${chunk.length} 个产品...`);
+        const batchParams = new URLSearchParams({
+          target,
+          pids: chunk.join(','),
+          batch: String(index + 1),
+          total: String(discover.total)
+        });
+        const batch = await fetchJson(`/api/check-batch?${batchParams.toString()}`);
+        if (!batch.ok) throw new Error(batch.reason || `第 ${index + 1} 批检测失败`);
+        appendBatchResults(batch);
+      }
+
+      finishScan();
+    };
+
+    demoBtn.addEventListener('click', () => {
+      targetInput.value = 'www.tuofeiyun.cn';
+      pidsInput.value = '';
+      targetInput.focus();
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const target = targetInput.value.trim();
+      const pids = pidsInput.value.trim();
+      if (!target) {
+        renderError('请输入目标站点地址。');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = '扫描中...';
+
+      try {
+        await runFullScan({ target, pids });
+      } catch (error) {
+        renderError('本地服务请求失败，请确认启动窗口没有被关闭。', error.message);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '开始检测';
+      }
+    });
+  </script>
+</body>
+</html>
