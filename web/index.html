@@ -187,7 +187,7 @@
 
     .summary {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 12px;
       margin-bottom: 18px;
     }
@@ -270,6 +270,50 @@
       border: 1px solid #e5e7eb;
     }
 
+    .trace {
+      margin-top: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .trace-level {
+      padding: 12px;
+      border-left: 3px solid var(--brand);
+      border-radius: 0 12px 12px 0;
+      background: #f8faff;
+    }
+
+    .trace-level-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .trace-product {
+      padding: 8px 0;
+      border-top: 1px dashed var(--line);
+      color: #344054;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .trace-end {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #ecfdf3;
+      color: #067647;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .trace-end.warn-end {
+      background: #fffaeb;
+      color: #b54708;
+    }
+
     pre {
       overflow: auto;
       margin: 12px 0 0;
@@ -313,12 +357,12 @@
         <p class="desc">
           输入站点域名后，工具会优先访问目标站的 <strong>/cart</strong> 页面识别全部商品分类，
           再逐个分类提取产品 ID，最后分批请求 <strong>/api/product/prodetail?pids[0]=产品ID</strong>，检查返回内容里是否存在
-          <strong>upstream_product_shopping_url</strong>。
+          <strong>upstream_product_shopping_url</strong>。发现上游后会继续追踪上游的上游，直到确认没有更上游或无法继续定位商品。
         </p>
         <div class="flow">
           <div><b>1. 输入站点</b><br>填写要检测的目标域名</div>
           <div><b>2. 全量分类</b><br>从 /cart 提取全部商品分类入口</div>
-          <div><b>3. 进度扫描</b><br>逐分类发现产品并分批检测</div>
+          <div><b>3. 逐级追踪</b><br>发现上游后继续查询下一层上游</div>
         </div>
       </div>
 
@@ -394,6 +438,21 @@
       return response.json();
     };
 
+    const toHttpUrl = (value) => {
+      try {
+        const url = new URL(String(value || ''));
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+      } catch (error) {
+        return '';
+      }
+    };
+
+    const externalLinkHtml = (value, label = '') => {
+      const safeUrl = toHttpUrl(value);
+      if (!safeUrl) return `<div class="hint">${escapeHtml(value || '无有效链接')}</div>`;
+      return `<a class="url" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label || safeUrl)}</a>`;
+    };
+
     const renderError = (message, extra = '') => {
       resultBox.className = 'card result show';
       resultBox.innerHTML = `
@@ -446,7 +505,11 @@
         foundCount: 0,
         rawContainsKey: false,
         requests: [],
-        results: []
+        results: [],
+        traceCompleted: 0,
+        traceTotal: 0,
+        tracedCount: 0,
+        traces: {}
       };
 
       resultBox.className = 'card result show';
@@ -466,6 +529,7 @@
           <div><b>识别方式</b><span>${discover.mode === 'cart' ? '自动遍历全部分类' : '手动产品 ID'}</span></div>
           <div><b>产品总数</b><span>${discover.total}</span></div>
           <div><b>命中数量</b><span id="foundCount">0</span></div>
+          <div><b>上游链已追踪</b><span id="tracedCount">0</span></div>
         </div>
         <div class="list" id="scanList"></div>
         <pre id="scanMeta">${escapeHtml(JSON.stringify({ discovery: scanState.discovery }, null, 2))}</pre>
@@ -485,20 +549,23 @@
 
     const resultItemHtml = (item) => {
       const state = item.hasUpstream
-        ? '<span class="ok">发现上游链接</span>'
-        : (item.exists ? '<span class="warn">字段为空或未泄露</span>' : '<span class="miss">未匹配到产品详情</span>');
+        ? '<span class="ok">发现上游链接，等待逐级追踪</span>'
+        : (item.exists ? '<span class="warn">无上游</span>' : '<span class="miss">未匹配到产品详情</span>');
       const title = item.productName ? `${item.productName}（ID: ${item.productId}）` : `产品 ID: ${item.productId}`;
       const link = item.hasUpstream
-        ? `<a class="url" href="${escapeHtml(item.upstreamUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.upstreamUrl)}</a>`
-        : '<div class="hint">没有拿到 upstream_product_shopping_url。</div>';
+        ? externalLinkHtml(item.upstreamUrl)
+        : (item.exists
+          ? '<div class="hint">upstream_product_shopping_url 为空，上游链到此结束。</div>'
+          : '<div class="hint">接口未返回该商品，无法确认是否存在上游。</div>');
 
       return `
-        <div class="item">
+        <div class="item" id="product-${escapeHtml(item.productId)}">
           <div class="item-head">
             <div class="item-title">${escapeHtml(title)}</div>
-            ${state}
+            <div id="product-status-${escapeHtml(item.productId)}">${state}</div>
           </div>
           ${link}
+          <div id="trace-${escapeHtml(item.productId)}"></div>
         </div>
       `;
     };
@@ -519,9 +586,123 @@
       updateProgress();
     };
 
+    const traceEndHtml = (trace) => {
+      const statusMap = {
+        none: { text: '无更上游，上游链到此结束', className: '' },
+        unresolved: { text: '无法确认下一层上游，追踪已停止', className: 'warn-end' },
+        error: { text: '上游页面请求失败，追踪已停止', className: 'warn-end' },
+        invalid_url: { text: '上游链接无效，追踪已停止', className: 'warn-end' },
+        cycle: { text: '检测到上游循环，追踪已安全停止', className: 'warn-end' },
+        partial: { text: '部分上游请求失败，当前结果不能确认到底', className: 'warn-end' },
+        max_depth: { text: '已达到 8 层安全上限，追踪已停止', className: 'warn-end' }
+      };
+      const state = statusMap[trace.status] || statusMap.error;
+      return `<div class="trace-end ${state.className}">${escapeHtml(state.text)}</div>`;
+    };
+
+    const traceLevelHtml = (level) => {
+      const products = level.products || [];
+      const sources = level.sources || [];
+      const sourceHtml = sources.map((source) => externalLinkHtml(source.finalUrl || source.url, source.origin || source.url)).join('');
+      const productHtml = products.length
+        ? products.map((product) => {
+          const name = product.productName ? `${product.productName}（ID: ${product.productId}）` : `产品 ID: ${product.productId}`;
+          const state = product.hasUpstream
+            ? '<span class="ok">发现下一层上游</span>'
+            : (product.exists ? '<span class="warn">无上游</span>' : '<span class="miss">接口未返回该商品，无法确认</span>');
+          return `
+            <div class="trace-product">
+              <b>${escapeHtml(name)}</b> · ${state}
+              ${product.hasUpstream ? externalLinkHtml(product.upstreamUrl) : ''}
+            </div>
+          `;
+        }).join('')
+        : '<div class="hint">本层没有识别到可查询商品。</div>';
+
+      return `
+        <div class="trace-level">
+          <div class="trace-level-head">
+            <span>第 ${escapeHtml(level.depth)} 层上游</span>
+            <span>${escapeHtml(level.checked || 0)} 个商品 / ${escapeHtml(level.found || 0)} 个继续上游</span>
+          </div>
+          ${sourceHtml}
+          ${productHtml}
+        </div>
+      `;
+    };
+
+    const renderTraceResult = (item, response) => {
+      const container = document.querySelector(`#trace-${item.productId}`);
+      const status = document.querySelector(`#product-status-${item.productId}`);
+      const trace = response && response.trace ? response.trace : {
+        status: 'error',
+        levels: [],
+        deepestLevel: 0,
+        checkedProducts: 0
+      };
+
+      scanState.traces[item.productId] = trace;
+      if (container) {
+        container.innerHTML = `
+          <div class="trace">
+            ${(trace.levels || []).map(traceLevelHtml).join('')}
+            ${traceEndHtml(trace)}
+          </div>
+        `;
+      }
+      if (status) {
+        status.innerHTML = trace.status === 'none'
+          ? `<span class="ok">已追踪 ${escapeHtml(trace.deepestLevel)} 层</span>`
+          : `<span class="warn">追踪至 ${escapeHtml(trace.deepestLevel)} 层</span>`;
+      }
+    };
+
+    const traceUpstreamResults = async () => {
+      const hits = scanState.results.filter((item) => item.hasUpstream);
+      scanState.traceTotal = hits.length;
+      if (hits.length === 0) return;
+
+      const cache = Object.create(null);
+      document.querySelector('#scanTitle').textContent = '正在追踪上游链';
+      document.querySelector('#progressFill').style.width = '0%';
+      document.querySelector('#progressPercent').textContent = '0%';
+
+      for (let index = 0; index < hits.length; index += 1) {
+        const item = hits[index];
+        const key = toHttpUrl(item.upstreamUrl) || String(item.upstreamUrl || '');
+        document.querySelector('#progressText').textContent = `正在追踪第 ${index + 1}/${hits.length} 条上游链...`;
+        document.querySelector('#scanPill').textContent = `${index}/${hits.length} 条链`;
+
+        let response = cache[key];
+        if (!response) {
+          try {
+            const params = new URLSearchParams({ url: item.upstreamUrl });
+            response = await fetchJson(`/api/trace-upstream?${params.toString()}`);
+          } catch (error) {
+            response = {
+              ok: false,
+              reason: error.message,
+              trace: { status: 'error', levels: [], deepestLevel: 0, checkedProducts: 0 }
+            };
+          }
+          cache[key] = response;
+        }
+
+        renderTraceResult(item, response);
+        scanState.traceCompleted += 1;
+        scanState.tracedCount += 1;
+        const percent = Math.round((scanState.traceCompleted / scanState.traceTotal) * 100);
+        document.querySelector('#progressFill').style.width = `${percent}%`;
+        document.querySelector('#progressPercent').textContent = `${percent}%`;
+        document.querySelector('#tracedCount').textContent = `${scanState.tracedCount}/${scanState.traceTotal}`;
+      }
+    };
+
     const finishScan = () => {
       document.querySelector('#scanTitle').textContent = '检测完成';
-      updateProgress('全部产品已扫描完成');
+      document.querySelector('#progressText').textContent = scanState.traceTotal
+        ? '全部产品和上游链已扫描完成'
+        : '全部产品已扫描完成，没有需要继续追踪的上游';
       document.querySelector('#progressFill').style.width = '100%';
       document.querySelector('#progressPercent').textContent = '100%';
       document.querySelector('#scanPill').textContent = `${scanState.foundCount}/${scanState.results.length} 命中`;
@@ -531,8 +712,10 @@
         total: scanState.ids.length,
         scanned: scanState.results.length,
         rawContainsKey: scanState.rawContainsKey,
+        traced: scanState.tracedCount,
         discovery: scanState.discovery,
-        requests: scanState.requests
+        requests: scanState.requests,
+        traces: scanState.traces
       }, null, 2);
     };
 
@@ -615,6 +798,7 @@
         appendBatchResults(batch);
       }
 
+      await traceUpstreamResults();
       finishScan();
     };
 

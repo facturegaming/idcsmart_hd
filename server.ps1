@@ -1,5 +1,6 @@
 param(
-    [int]$Port = 17808
+    [int]$Port = 17808,
+    [switch]$NoBrowser
 )
 
 $ErrorActionPreference = 'Stop'
@@ -132,12 +133,17 @@ function Invoke-TextRequest {
         }
 
         $statusCode = 200
+        $finalUrl = $Url
         if ($response -is [System.Net.HttpWebResponse]) {
             $statusCode = [int]$response.StatusCode
+            if ($null -ne $response.ResponseUri) {
+                $finalUrl = $response.ResponseUri.AbsoluteUri
+            }
         }
 
         return [ordered]@{
             url = $Url
+            finalUrl = $finalUrl
             statusCode = $statusCode
             body = [string]$body
         }
@@ -532,6 +538,379 @@ function Read-UpstreamResults {
     }
 }
 
+function Read-UpstreamProductsByOrigin {
+    param(
+        [string]$Origin,
+        [string[]]$Ids,
+        [int]$BatchSize = 20
+    )
+
+    $products = New-Object System.Collections.Generic.List[object]
+    $requests = New-Object System.Collections.Generic.List[object]
+    $errors = New-Object System.Collections.Generic.List[object]
+
+    for ($offset = 0; $offset -lt $Ids.Count; $offset += $BatchSize) {
+        $last = [Math]::Min($offset + $BatchSize - 1, $Ids.Count - 1)
+        $batchIds = @($Ids[$offset..$last])
+        $apiUrl = Build-ProdetailUrl -Origin $Origin -Ids $batchIds
+
+        try {
+            $apiResponse = Invoke-TextRequest -Url $apiUrl -TimeoutSec 18
+            if ($apiResponse.statusCode -ge 400) {
+                throw ('HTTP {0}' -f $apiResponse.statusCode)
+            }
+            $readResult = Read-UpstreamResults -Body $apiResponse.body -Ids $batchIds
+            foreach ($item in @($readResult.results)) { $products.Add($item) }
+            $requests.Add([ordered]@{
+                apiUrl = $apiUrl
+                statusCode = $apiResponse.statusCode
+                ids = $batchIds
+            })
+        } catch {
+            $errors.Add([ordered]@{
+                apiUrl = $apiUrl
+                ids = $batchIds
+                message = $_.Exception.Message
+            })
+        }
+    }
+
+    return [ordered]@{
+        products = $products.ToArray()
+        requests = $requests.ToArray()
+        errors = $errors.ToArray()
+    }
+}
+
+function Resolve-UpstreamShoppingUrl {
+    param([string]$RawUrl)
+
+    if ([string]::IsNullOrWhiteSpace($RawUrl)) { return $null }
+
+    $value = $RawUrl.Trim()
+    try { $value = [System.Net.WebUtility]::HtmlDecode($value).Trim() } catch {}
+
+    if ($value -match '^//') { $value = 'https:' + $value }
+    if ($value -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $null }
+
+    try {
+        $uri = [System.Uri]$value
+    } catch {
+        return $null
+    }
+
+    if ($uri.Scheme -ne 'http' -and $uri.Scheme -ne 'https') { return $null }
+    if ([string]::IsNullOrWhiteSpace($uri.Host)) { return $null }
+
+    return [ordered]@{
+        url = $uri.AbsoluteUri
+        origin = ('{0}://{1}' -f $uri.Scheme, $uri.Authority).TrimEnd('/')
+        host = $uri.Host
+    }
+}
+
+function Read-QueryValues {
+    param(
+        [System.Uri]$Uri,
+        [string[]]$Names
+    )
+
+    $values = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Uri -or [string]::IsNullOrWhiteSpace($Uri.Query)) {
+        return $values.ToArray()
+    }
+
+    $nameMap = @{}
+    foreach ($name in $Names) { $nameMap[$name.ToLowerInvariant()] = $true }
+
+    foreach ($pair in $Uri.Query.TrimStart('?') -split '&') {
+        if ([string]::IsNullOrWhiteSpace($pair)) { continue }
+        $parts = $pair -split '=', 2
+        try { $key = [System.Uri]::UnescapeDataString($parts[0]).ToLowerInvariant() } catch { $key = $parts[0].ToLowerInvariant() }
+        if (-not $nameMap.ContainsKey($key)) { continue }
+
+        $rawValue = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+        try { $decoded = [System.Uri]::UnescapeDataString($rawValue.Replace('+', ' ')) } catch { $decoded = $rawValue }
+        foreach ($id in @(Read-Ids -Text $decoded)) { $values.Add($id) }
+    }
+
+    return @($values | Select-Object -Unique)
+}
+
+function Find-UpstreamProductIds {
+    param(
+        [string]$ShoppingUrl,
+        [string]$Html
+    )
+
+    $ids = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    $uri = $null
+    try { $uri = [System.Uri]$ShoppingUrl } catch {}
+
+    if ($null -ne $uri) {
+        foreach ($id in @(Read-QueryValues -Uri $uri -Names @('pid', 'product_id', 'productId', 'goods_id', 'goodsId'))) {
+            if (-not $seen.ContainsKey($id)) {
+                $ids.Add($id)
+                $seen[$id] = $true
+            }
+        }
+
+        $pathPatterns = @(
+            '(?:^|/)(?:product|goods|cart/product)/(\d{1,10})(?:/|$)',
+            '(?:^|/)(\d{1,10})\.html(?:/|$)'
+        )
+        foreach ($pattern in $pathPatterns) {
+            foreach ($match in [System.Text.RegularExpressions.Regex]::Matches($uri.AbsolutePath, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+                if ($match.Groups.Count -le 1) { continue }
+                $id = $match.Groups[1].Value
+                if (-not $seen.ContainsKey($id)) {
+                    $ids.Add($id)
+                    $seen[$id] = $true
+                }
+            }
+        }
+    }
+
+    if ($ids.Count -gt 0) {
+        return $ids.ToArray()
+    }
+
+    foreach ($id in @(Find-CandidateIds -Html $Html)) {
+        if (-not $seen.ContainsKey($id)) {
+            $ids.Add($id)
+            $seen[$id] = $true
+        }
+    }
+
+    return $ids.ToArray()
+}
+
+function Trace-UpstreamChain {
+    param(
+        [string]$ShoppingUrl,
+        [int]$MaxDepth = 8
+    )
+
+    $resolved = Resolve-UpstreamShoppingUrl -RawUrl $ShoppingUrl
+    if ($null -eq $resolved) {
+        return [ordered]@{
+            startUrl = $ShoppingUrl
+            maxDepth = $MaxDepth
+            levels = @()
+            status = 'invalid_url'
+            reason = 'Upstream shopping URL is invalid or unsupported.'
+            deepestLevel = 0
+            checkedProducts = 0
+            upstreamCount = 0
+        }
+    }
+
+    $levels = New-Object System.Collections.Generic.List[object]
+    $seenProducts = @{}
+    $seenShoppingUrls = @{}
+    $currentUrls = @($resolved.url)
+    $depth = 1
+    $checkedProducts = 0
+    $upstreamCount = 0
+    $hadErrors = $false
+    $cycleDetected = $false
+    $finalStatus = 'none'
+    $finalReason = 'No further upstream was found.'
+
+    while ($currentUrls.Count -gt 0 -and $depth -le $MaxDepth) {
+        $levelSources = New-Object System.Collections.Generic.List[object]
+        $levelProducts = New-Object System.Collections.Generic.List[object]
+        $levelErrors = New-Object System.Collections.Generic.List[object]
+        $nextUrls = New-Object System.Collections.Generic.List[string]
+        $nextSeen = @{}
+        $originIds = @{}
+
+        foreach ($url in $currentUrls) {
+            if ($seenShoppingUrls.ContainsKey($url)) { continue }
+            $seenShoppingUrls[$url] = $true
+
+            try {
+                $pageResolved = Resolve-UpstreamShoppingUrl -RawUrl $url
+                if ($null -eq $pageResolved) {
+                    throw 'Invalid upstream page URL.'
+                }
+
+                $ids = @(Find-UpstreamProductIds -ShoppingUrl $url -Html '')
+                $finalUrl = $url
+                $statusCode = 0
+                $sourceMode = 'url'
+
+                if ($ids.Count -eq 0) {
+                    $pageResponse = Invoke-TextRequest -Url $url -TimeoutSec 10
+                    if ($pageResponse.statusCode -ge 400) {
+                        throw ('HTTP {0}' -f $pageResponse.statusCode)
+                    }
+                    $pageResolved = Resolve-UpstreamShoppingUrl -RawUrl $pageResponse.finalUrl
+                    if ($null -eq $pageResolved) { $pageResolved = Resolve-UpstreamShoppingUrl -RawUrl $url }
+                    $ids = @(Find-UpstreamProductIds -ShoppingUrl $pageResponse.finalUrl -Html $pageResponse.body)
+                    $finalUrl = $pageResponse.finalUrl
+                    $statusCode = $pageResponse.statusCode
+                    $sourceMode = 'page'
+                }
+
+                $levelSources.Add([ordered]@{
+                    url = $url
+                    finalUrl = $finalUrl
+                    origin = $pageResolved.origin
+                    statusCode = $statusCode
+                    mode = $sourceMode
+                    candidateCount = $ids.Count
+                })
+
+                if (-not $originIds.ContainsKey($pageResolved.origin)) {
+                    $originIds[$pageResolved.origin] = New-Object System.Collections.Generic.List[string]
+                }
+                foreach ($id in $ids) {
+                    $key = ($pageResolved.origin.ToLowerInvariant() + '|' + $id)
+                    if (-not $seenProducts.ContainsKey($key)) {
+                        if (-not $originIds[$pageResolved.origin].Contains($id)) {
+                            $originIds[$pageResolved.origin].Add($id)
+                        }
+                    } else {
+                        $cycleDetected = $true
+                    }
+                }
+            } catch {
+                $hadErrors = $true
+                $levelErrors.Add([ordered]@{
+                    url = $url
+                    message = $_.Exception.Message
+                })
+            }
+        }
+
+        foreach ($origin in @($originIds.Keys | Sort-Object)) {
+            $ids = @($originIds[$origin].ToArray())
+            if ($ids.Count -eq 0) { continue }
+
+            $originResult = Read-UpstreamProductsByOrigin -Origin $origin -Ids $ids
+            foreach ($error in @($originResult.errors)) {
+                $hadErrors = $true
+                $levelErrors.Add([ordered]@{
+                    url = $error.apiUrl
+                    message = $error.message
+                })
+            }
+
+            foreach ($item in @($originResult.products)) {
+                $key = ($origin.ToLowerInvariant() + '|' + $item.productId)
+                $seenProducts[$key] = $true
+                $checkedProducts += 1
+                if ($item.hasUpstream) {
+                    $upstreamCount += 1
+                    $next = Resolve-UpstreamShoppingUrl -RawUrl $item.upstreamUrl
+                    if ($null -ne $next -and -not $seenShoppingUrls.ContainsKey($next.url) -and -not $nextSeen.ContainsKey($next.url)) {
+                        $nextUrls.Add($next.url)
+                        $nextSeen[$next.url] = $true
+                    } elseif ($null -ne $next -and $seenShoppingUrls.ContainsKey($next.url)) {
+                        $cycleDetected = $true
+                    } elseif ($null -eq $next) {
+                        $hadErrors = $true
+                        $levelErrors.Add([ordered]@{
+                            url = $item.upstreamUrl
+                            message = 'Invalid next upstream URL.'
+                        })
+                    }
+                }
+
+                $levelProducts.Add([ordered]@{
+                    origin = $origin
+                    productId = $item.productId
+                    productName = $item.productName
+                    exists = $item.exists
+                    hasUpstream = $item.hasUpstream
+                    upstreamUrl = $item.upstreamUrl
+                })
+            }
+        }
+
+        $levels.Add([ordered]@{
+            depth = $depth
+            sources = $levelSources.ToArray()
+            products = $levelProducts.ToArray()
+            errors = $levelErrors.ToArray()
+            checked = $levelProducts.Count
+            found = @($levelProducts | Where-Object { $_.hasUpstream }).Count
+        })
+
+        if ($nextUrls.Count -eq 0) {
+            $levelHasUpstream = @($levelProducts | Where-Object { $_.hasUpstream }).Count -gt 0
+            $levelHasMissingProducts = @($levelProducts | Where-Object { -not $_.exists }).Count -gt 0
+            if ($levelHasUpstream -and $hadErrors) {
+                $finalStatus = 'error'
+                $finalReason = 'An upstream link was found but could not be resolved or checked.'
+            } elseif ($levelHasUpstream -and $cycleDetected) {
+                $finalStatus = 'cycle'
+                $finalReason = 'The upstream chain points to a previously checked page.'
+            } elseif ($levelHasUpstream) {
+                $finalStatus = 'unresolved'
+                $finalReason = 'An upstream link could not be queued for further checking.'
+            } elseif ($cycleDetected) {
+                $finalStatus = 'cycle'
+                $finalReason = 'The upstream chain returns to a previously checked page or product.'
+            } elseif ($levelProducts.Count -eq 0 -and $levelErrors.Count -gt 0) {
+                $finalStatus = 'error'
+                $finalReason = 'The upstream page could not be resolved or checked.'
+            } elseif ($levelProducts.Count -eq 0) {
+                $finalStatus = 'unresolved'
+                $finalReason = 'The upstream page did not expose a product ID.'
+            } elseif ($levelHasMissingProducts) {
+                $finalStatus = 'unresolved'
+                $finalReason = 'The upstream API did not return one or more detected products.'
+            } elseif ($hadErrors) {
+                $finalStatus = 'partial'
+                $finalReason = 'No further upstream was found in checked products, but some requests failed.'
+            }
+            break
+        }
+
+        if ($depth -ge $MaxDepth) {
+            $finalStatus = 'max_depth'
+            $finalReason = 'The maximum upstream depth was reached.'
+            break
+        }
+
+        $currentUrls = $nextUrls.ToArray()
+        $depth += 1
+    }
+
+    return [ordered]@{
+        startUrl = $resolved.url
+        maxDepth = $MaxDepth
+        levels = $levels.ToArray()
+        status = $finalStatus
+        reason = $finalReason
+        deepestLevel = $levels.Count
+        checkedProducts = $checkedProducts
+        upstreamCount = $upstreamCount
+    }
+}
+
+function Handle-TraceUpstream {
+    param([System.Net.HttpListenerContext]$Context)
+
+    $url = $Context.Request.QueryString['url']
+    try {
+        $trace = Trace-UpstreamChain -ShoppingUrl $url
+        Send-Json -Context $Context -StatusCode 200 -Data ([ordered]@{
+            ok = ($trace.status -ne 'invalid_url')
+            trace = $trace
+            reason = $trace.reason
+        })
+    } catch {
+        Send-Json -Context $Context -StatusCode 200 -Data ([ordered]@{
+            ok = $false
+            reason = $_.Exception.Message
+        })
+    }
+}
+
 function Handle-Discover {
     param([System.Net.HttpListenerContext]$Context)
 
@@ -776,7 +1155,9 @@ Write-Host ('Open URL: ' + $prefix) -ForegroundColor Cyan
 Write-Host 'Close this window to stop the service.'
 Write-Host ''
 
-Start-Process $prefix
+if (-not $NoBrowser) {
+    Start-Process $prefix
+}
 
 try {
     while ($listener.IsListening) {
@@ -789,6 +1170,8 @@ try {
                 Handle-DiscoverPage -Context $context
             } elseif ($requestPath -eq '/api/check-batch') {
                 Handle-CheckBatch -Context $context
+            } elseif ($requestPath -eq '/api/trace-upstream') {
+                Handle-TraceUpstream -Context $context
             } elseif ($requestPath -eq '/api/check') {
                 Handle-Check -Context $context
             } else {
